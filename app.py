@@ -20,33 +20,38 @@ reader = load_reader()
 
 # 3. Core Logic Function
 def process_license_plate(img_array):
-    # Convert to grayscale
+    height, width = img_array.shape[:2]
+    
+    # 1. Preprocessing
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
-    
-    # Noise Reduction: Bilateral Filter preserves edges better than Gaussian blur
     bfilter = cv2.bilateralFilter(gray, 11, 17, 17)
-    
-    # Adaptive Thresholding: Crucial for "working for all" lighting conditions
     thresh = cv2.adaptiveThreshold(bfilter, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                    cv2.THRESH_BINARY, 11, 2)
     
-    # Run OCR
+    # 2. OCR with Spatial Filtering
     result = reader.readtext(thresh)
     
-    # Filter by confidence and clean text
-    raw_text = ""
+    valid_parts = []
     for res in result:
-        if res[2] > 0.20:  # Lowered threshold to pick up faint numbers
-            raw_text += res[1].upper()
+        coords = res[0] # List of 4 corners: [[x,y], [x,y], [x,y], [x,y]]
+        text = res[1].upper()
+        conf = res[2]
+        
+        # Calculate the vertical center of this specific text box
+        text_y_center = (coords[0][1] + coords[2][1]) / 2
+        
+        # SPATIAL FILTER: Ignore text in the top 20% or bottom 20% of the image
+        # This kills watermarks like "Team-BHP" or "Hosted on"
+        if 0.20 * height < text_y_center < 0.80 * height:
+            if conf > 0.25:
+                valid_parts.append(text)
     
-    # Remove all non-alphanumeric characters
-    clean_text = re.sub(r'[^A-Z0-9]', '', raw_text)
+    clean_text = re.sub(r'[^A-Z0-9]', '', "".join(valid_parts))
     
-    # Pattern matching for Indian License Plates
+    # 3. Indian Plate Pattern Match
     patterns = [
-        r'[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}', # Modern (TS09EB1234)
-        r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,2}[0-9]{4}', # Variations (DL7CQ1939)
-        r'[A-Z]{2}[0-9]{6}',                   # Older formats
+        r'[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}', # WB06F9209
+        r'[A-Z]{2}[0-9]{1,6}[A-Z0-9]{0,4}'      # Fallback for older plates
     ]
     
     for p in patterns:
