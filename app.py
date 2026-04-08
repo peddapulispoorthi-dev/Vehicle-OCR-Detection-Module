@@ -8,93 +8,88 @@ import numpy as np
 import re
 from PIL import Image
 
-# Initialize the OCR reader
+# 1. Page Configuration
+st.set_page_config(page_title="AI Vehicle Scanner", page_icon="🚗", layout="centered")
+
+# 2. Load the AI Model (Cached so it stays fast)
 @st.cache_resource
 def load_reader():
-    # 'gpu=False' is used for CPU-based cloud hosting; set to True if running locally with NVIDIA
     return easyocr.Reader(['en'], gpu=False)
 
 reader = load_reader()
 
-def extract_number(img_array):
-    # 1. Preprocessing
+# 3. Core Logic Function
+def process_license_plate(img_array):
+    # Convert to grayscale
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     
-    # Bilateral filter removes noise but keeps edges sharp
+    # Noise Reduction: Bilateral Filter preserves edges better than Gaussian blur
     bfilter = cv2.bilateralFilter(gray, 11, 17, 17)
     
-    # Thresholding for better contrast
-    _, thresh = cv2.threshold(bfilter, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    # Adaptive Thresholding: Crucial for "working for all" lighting conditions
+    thresh = cv2.adaptiveThreshold(bfilter, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                   cv2.THRESH_BINARY, 11, 2)
     
-    # 2. OCR with Confidence Scores
+    # Run OCR
     result = reader.readtext(thresh)
     
-    # 3. Filtering and Cleaning
-    raw_parts = []
+    # Filter by confidence and clean text
+    raw_text = ""
     for res in result:
-        text = res[1]
-        confidence = res[2]
-        
-        # Filtering: Only keep text if AI is more than 35% sure
-        # This helps ignore tiny background text/watermarks
-        if confidence > 0.35:
-            raw_parts.append(text.upper())
+        if res[2] > 0.20:  # Lowered threshold to pick up faint numbers
+            raw_text += res[1].upper()
     
-    full_string = "".join(raw_parts)
+    # Remove all non-alphanumeric characters
+    clean_text = re.sub(r'[^A-Z0-9]', '', raw_text)
     
-    # Clean the text (Remove symbols and spaces)
-    clean_text = re.sub(r'[^A-Z0-9]', '', full_string)
-    
-    # 4. Indian License Plate Logic (Regex)
-    # This specifically looks for State Code (2 letters) + District (2 numbers)...
-    # This helps ignore things like "TEAM" at the end or "IND" at the start.
+    # Pattern matching for Indian License Plates
     patterns = [
-        r'[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}', # Modern: DL7CQ1939
-        r'[A-Z]{2}[0-9]{2}[0-9]{4}',           # Older: AP091234
-        r'[A-Z]{3}[0-9]{4}'                    # Very Old: ABC1234
+        r'[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}', # Modern (TS09EB1234)
+        r'[A-Z]{2}[0-9]{1,2}[A-Z]{1,2}[0-9]{4}', # Variations (DL7CQ1939)
+        r'[A-Z]{2}[0-9]{6}',                   # Older formats
     ]
     
     for p in patterns:
         match = re.search(p, clean_text)
         if match:
-            return match.group()
+            return match.group(), thresh
 
-    return clean_text
+    return clean_text, thresh
 
-# --- STREAMLIT UI ---
-st.set_page_config(page_title="AI Vehicle Scanner", page_icon="🚗", layout="centered")
-
+# 4. User Interface (UI)
 st.title("🚗 Vehicle Number Plate Scanner")
-st.markdown("### OS Project: Number Plate Extraction Module")
-st.write("Upload a cropped image to extract the registration number.")
+st.markdown("### OS Project Module: Automated OCR Extraction")
+st.info("Note: For best results, ensure the number plate is clearly visible in the crop.")
 
-uploaded_file = st.file_uploader("Choose a plate image...", type=["jpg", "jpeg", "png"])
+uploaded_file = st.file_uploader("Upload Plate Image", type=["jpg", "jpeg", "png"])
 
-if uploaded_file is not None:
-    # Display Image
+if uploaded_file:
     image = Image.open(uploaded_file)
-    st.image(image, caption='Target Image', use_container_width=True)
+    st.image(image, caption='Uploaded Image', use_container_width=True)
     
-    if st.button('🚀 Extract Vehicle Number'):
-        with st.spinner('Analyzing characters...'):
-            # Convert to OpenCV format
+    if st.button('🚀 Extract Details'):
+        with st.spinner('AI is processing image...'):
             img_array = np.array(image)
+            plate_no, processed_img = process_license_plate(img_array)
             
-            # Process
-            plate_number = extract_number(img_array)
-            
-            if plate_number:
-                st.success(f"✅ Extracted Number: **{plate_number}**")
+            if plate_no:
+                st.success(f"### Extracted Number: **{plate_no}**")
                 
-                # Visual Database Lookup Simulation
-                st.divider()
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.metric("Vehicle ID", plate_number)
-                with col2:
-                    st.metric("System Status", "Verified")
+                # Mock Database Response
+                with st.expander("View System Logs"):
+                    st.json({
+                        "Vehicle_No": plate_no,
+                        "Status": "Verified",
+                        "Location_Log": "VNRVJIET_GATE_1",
+                        "Confidence": "High"
+                    })
+                
+                # Show the 'Computer Vision' view for the viva
+                if st.checkbox("Show Pre-processed Image (What the AI sees)"):
+                    st.image(processed_img, caption="Thresholded Image", cmap='gray')
             else:
-                st.error("❌ Accuracy low. Please try a closer, clearer crop of the plate.")
+                st.error("No valid number plate pattern detected. Please try a closer crop.")
 
+# 5. Footer
 st.markdown("---")
-st.caption("Developed by Spoorthi Peddapuli | VNRVJIET CSE-DS")
+st.caption("Developed by Spoorthi Peddapuli | VNRVJIET CSE-DS | OS Project 2026")
