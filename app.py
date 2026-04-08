@@ -20,46 +20,46 @@ reader = load_reader()
 
 # 3. Core Logic Function
 def process_license_plate(img_array):
-    height, width = img_array.shape[:2]
-    
     # 1. Preprocessing
     gray = cv2.cvtColor(img_array, cv2.COLOR_RGB2GRAY)
     bfilter = cv2.bilateralFilter(gray, 11, 17, 17)
     thresh = cv2.adaptiveThreshold(bfilter, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
                                    cv2.THRESH_BINARY, 11, 2)
     
-    # 2. OCR with Spatial Filtering
+    # 2. OCR 
     result = reader.readtext(thresh)
     
-    valid_parts = []
+    # 3. Smart Filtering
+    all_detected_text = ""
+    candidates = []
+
     for res in result:
-        coords = res[0] # List of 4 corners: [[x,y], [x,y], [x,y], [x,y]]
         text = res[1].upper()
         conf = res[2]
         
-        # Calculate the vertical center of this specific text box
-        text_y_center = (coords[0][1] + coords[2][1]) / 2
+        # Clean text of symbols for checking
+        clean_subtext = re.sub(r'[^A-Z0-9]', '', text)
         
-        # SPATIAL FILTER: Ignore text in the top 20% or bottom 20% of the image
-        # This kills watermarks like "Team-BHP" or "Hosted on"
-        if 0.20 * height < text_y_center < 0.80 * height:
-            if conf > 0.25:
-                valid_parts.append(text)
+        # Only ignore text if it's very low confidence or likely a watermark
+        if conf > 0.15 and "TEAMBHP" not in clean_subtext and "HOSTED" not in clean_subtext:
+            candidates.append(clean_subtext)
     
-    clean_text = re.sub(r'[^A-Z0-9]', '', "".join(valid_parts))
+    full_string = "".join(candidates)
     
-    # 3. Indian Plate Pattern Match
+    # 4. Refined Indian Plate Patterns
+    # We use a more flexible regex to catch plates even if there are small gaps
     patterns = [
-        r'[A-Z]{2}[0-9]{2}[A-Z]{1,2}[0-9]{4}', # WB06F9209
-        r'[A-Z]{2}[0-9]{1,6}[A-Z0-9]{0,4}'      # Fallback for older plates
+        r'[A-Z]{2}[0-9]{2}[A-Z]{0,2}[0-9]{4}', # Standard: WB06F9209
+        r'[A-Z]{2}[0-9]{1,2}[A-Z]{0,2}[0-9]{4}', # DL7CQ1939
+        r'[A-Z]{1,3}[0-9]{1,4}[A-Z]{0,2}[0-9]{0,4}' # Fallback for old/partial plates
     ]
     
     for p in patterns:
-        match = re.search(p, clean_text)
+        match = re.search(p, full_string)
         if match:
             return match.group(), thresh
 
-    return clean_text, thresh
+    return full_string[:10] if full_string else None, thresh
 
 # 4. User Interface (UI)
 st.title("🚗 Vehicle Number Plate Scanner")
